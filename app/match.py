@@ -40,14 +40,17 @@ def project_tangent(ra_deg, dec_deg, ra0_deg, dec0_deg):
     return np.rad2deg(xi) * 3600.0, np.rad2deg(eta) * 3600.0  # arcsec
 
 
-def _triangles(pts: np.ndarray, max_stars: int):
+def _triangles(pts: np.ndarray, max_stars: int, order=None):
     """Yield (inv1, inv2, (v0, v1, v2)) for triangles of the first max_stars.
 
     Invariants are scale- and mirror-invariant side-length ratios.  Vertices
     are returned canonically ordered by their opposite side length (shortest
     to longest), so two matched triangles imply an exact vertex mapping.
     """
-    p = pts[:max_stars]
+    if order is None:
+        order = np.arange(min(len(pts), max_stars))
+    order = np.asarray(order)[:max_stars]
+    p = pts[order]
     n = len(p)
     out = []
     for i, j, k in itertools.combinations(range(n), 3):
@@ -59,8 +62,22 @@ def _triangles(pts: np.ndarray, max_stars: int):
         d = [o[0] for o in opp]
         if d[2] <= 0 or d[0] / d[2] < 0.05:
             continue  # degenerate / nearly collinear
-        out.append((d[1] / d[2], d[0] / d[2], (opp[0][1], opp[1][1], opp[2][1])))
+        verts = tuple(int(order[o[1]]) for o in opp)
+        out.append((d[1] / d[2], d[0] / d[2], verts))
     return out
+
+
+def _catalog_subset(cat_xy: np.ndarray, max_stars: int) -> np.ndarray:
+    """Deterministically pick triangle candidates independent of list order.
+
+    The previous implementation simply used the first *max_stars* catalog
+    entries, so solving depended on the caller's catalog ordering.  The
+    tangent-point distance is an intrinsic geometric property, so the
+    nearest stars give an order-independent (and spatially compact,
+    in-FOV-biased) candidate set.
+    """
+    dist = np.hypot(cat_xy[:, 0], cat_xy[:, 1])
+    return np.argsort(dist, kind="stable")[:max_stars]
 
 
 def _fit_affine(src: np.ndarray, dst: np.ndarray):
@@ -126,7 +143,8 @@ def match(src_xy: np.ndarray, cat_xy: np.ndarray,
         raise MatchError("too few sources or catalog stars for geometric matching")
 
     src_tris = _triangles(src_xy, MAX_TRI_STARS_SRC)
-    cat_tris = _triangles(cat_xy, MAX_TRI_STARS_CAT)
+    cat_order = _catalog_subset(cat_xy, MAX_TRI_STARS_CAT)
+    cat_tris = _triangles(cat_xy, MAX_TRI_STARS_CAT, order=cat_order)
     if not src_tris or not cat_tris:
         raise MatchError("could not build triangle asterisms (degenerate geometry)")
 

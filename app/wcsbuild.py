@@ -1,14 +1,33 @@
 """Build a TAN WCS from the solved affine and merge it into the FITS HDU (req. 5)."""
 from __future__ import annotations
 
+import re
+
 import numpy as np
 from astropy.io import fits
 
 # Old-WCS keywords that must be removed to avoid conflicting solutions.
-_OLD_WCS_PREFIXES = ("CD", "PC", "CDELT", "CROTA", "CRPIX", "CRVAL", "CTYPE",
-                     "CUNIT", "PV", "PS", "WCSAXES", "A_", "B_", "AP_", "BP_",
-                     "LONPOLE", "LATPOLE", "RADESYS", "EQUINOX", "EPOCH")
-_OLD_WCS_EXACT = {"WCSAXES", "LONPOLE", "LATPOLE", "RADESYS", "EQUINOX", "EPOCH"}
+# Match the WCS grammar precisely (CD1_1, PC2_2, CRPIX1A, ...) instead of
+# using bare prefixes: a startswith("PC") test also deleted observer
+# keywords such as PC_TEMP or PCTIME, and startswith("CD") hit CDP*.
+# Alternate-coordinate corrections (A_ORDER, A_0_2, AP_*, BP_*) match too.
+_WCS_KEY_RE = re.compile(
+    r"^(?:"
+    r"CD[0-9_]{2,4}[A-Z]?"          # CD1_1, CD1_1A
+    r"|PC[0-9_]{2,4}[A-Z]?"         # PC1_1, PC2_2A
+    r"|CDELT[0-9]+[A-Z]?"           # CDELT1, CDELT1A
+    r"|CROTA[0-9]+[A-Z]?"           # CROTA2
+    r"|CRPIX[0-9]+[A-Z]?"           # CRPIX1
+    r"|CRVAL[0-9]+[A-Z]?"           # CRVAL2A
+    r"|CTYPE[0-9]+[A-Z]?"           # CTYPE1
+    r"|CUNIT[0-9]+[A-Z]?"           # CNAME1
+    r"|CNAME[0-9]+[A-Z]?"           # CUNIT2
+    r"|P[VS][0-9]+_[0-9]+[A-Z]?"    # PV1_2, PS2_1
+    r"|WCSAXES"
+    r"|LONPOLE|LATPOLE|RADESYS|EQUINOX|EPOCH"
+    r"|[AB]P?_ORDER|[AB]P?_[0-9]+_[0-9]+"
+    r")$"
+)
 
 
 def affine_to_wcs_header(A: np.ndarray, b: np.ndarray,
@@ -38,16 +57,11 @@ def affine_to_wcs_header(A: np.ndarray, b: np.ndarray,
 
 def strip_old_wcs(header: fits.Header) -> None:
     for key in list(header.keys()):
-        if key in _OLD_WCS_EXACT:
-            del header[key]
-            continue
-        for pre in _OLD_WCS_PREFIXES:
-            if key.startswith(pre) and key not in ("COMMENT", "HISTORY"):
-                try:
-                    del header[key]
-                except KeyError:
-                    pass
-                break
+        if _WCS_KEY_RE.match(key):
+            try:
+                del header[key]
+            except KeyError:
+                pass
 
 
 def solved_fits_bytes(hdu: fits.PrimaryHDU, wcs_header: dict) -> bytes:
@@ -61,4 +75,3 @@ def solved_fits_bytes(hdu: fits.PrimaryHDU, wcs_header: dict) -> bytes:
     buf = io.BytesIO()
     out.writeto(buf, overwrite=True)
     return buf.getvalue()
-
